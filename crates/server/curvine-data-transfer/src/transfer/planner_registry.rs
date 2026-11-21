@@ -102,7 +102,7 @@ mod tests {
     use super::*;
     use crate::transfer::{LoadExportPlanner, PlannedTransfer, PlannerContext};
     use curvine_fs_api::Path;
-    use curvine_model::{TransferCommand, TransferJobInfo, TransferJobRecord, TransferKind};
+    use curvine_model::{TransferCommand, TransferJobRecord, TransferKind};
 
     struct TestPlanner;
 
@@ -129,14 +129,6 @@ mod tests {
             _: &TransferJobRecord,
             _: &PlannerContext,
         ) -> FsResult<PlannedTransfer> {
-            unreachable!("registry tests never execute a planner")
-        }
-
-        fn transfer_job_info(
-            &self,
-            _: &TransferJobRecord,
-            _: &PlannerContext,
-        ) -> FsResult<TransferJobInfo> {
             unreachable!("registry tests never execute a planner")
         }
     }
