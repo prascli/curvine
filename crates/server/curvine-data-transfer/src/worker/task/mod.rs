@@ -24,6 +24,12 @@ pub use self::plugin::{JobExecutor, JobFuture, JobPlugin, ResourceClass, TaskOut
 mod registry;
 pub use self::registry::JobRegistry;
 
+mod envelope;
+pub use self::envelope::TaskEnvelope;
+
+mod transfer_plugin;
+pub use self::transfer_plugin::TransferPlugin;
+
 mod task_manager;
 pub use self::task_manager::TaskManager;
 
