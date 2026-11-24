@@ -3,7 +3,7 @@ use clap::Subcommand;
 use curvine_core_error::CommonResult;
 use curvine_fs_api::{CurvineURI, FileSystem, Reader};
 use curvine_unified_fs::UnifiedFileSystem;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 #[derive(Subcommand, Debug)]
@@ -15,6 +15,19 @@ pub enum GetCommand {
         #[clap(help = "Local destination path")]
         local_path: PathBuf,
     },
+}
+
+/// Sibling path a download is written to before it is published.
+///
+/// The suffix keeps the temporary file in the destination directory, so the
+/// final `rename` stays within one filesystem and cannot fail with `EXDEV`.
+fn part_path(final_path: &Path) -> PathBuf {
+    let mut name = final_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(".curvine-part");
+    final_path.with_file_name(name)
 }
 
 impl GetCommand {
@@ -85,13 +98,17 @@ impl GetCommand {
                             final_local_path = final_local_path.join(filename);
                         }
 
-                        // Open local file for writing
-                        let mut file = match fs::File::create(&final_local_path).await {
+                        // Write to a sibling temp file and publish it with a
+                        // rename once the transfer succeeded: truncating the
+                        // destination first destroyed a pre-existing local file
+                        // even when the download failed (#2315).
+                        let part_path = part_path(&final_local_path);
+                        let mut file = match fs::File::create(&part_path).await {
                             Ok(file) => file,
                             Err(e) => {
                                 return Err(format!(
                                     "Cannot create local file '{}': {}",
-                                    final_local_path.display(),
+                                    part_path.display(),
                                     e
                                 )
                                 .into());
@@ -108,9 +125,11 @@ impl GetCommand {
                                 let bytes_read = match copied {
                                     Ok(bytes_read) => bytes_read,
                                     Err(e) => {
-                                        // Do not leave a truncated file behind.
+                                        // Only the partial download is ours to
+                                        // remove; the destination was never
+                                        // touched.
                                         drop(file);
-                                        let _ = fs::remove_file(&final_local_path).await;
+                                        let _ = fs::remove_file(&part_path).await;
                                         return Err(format!(
                                             "Cannot download '{}': {}",
                                             path.full_path(),
@@ -121,6 +140,8 @@ impl GetCommand {
                                 };
 
                                 if let Err(e) = reader.complete().await {
+                                    drop(file);
+                                    let _ = fs::remove_file(&part_path).await;
                                     return Err(format!(
                                         "Cannot complete read of '{}': {}",
                                         path.full_path(),
@@ -129,20 +150,50 @@ impl GetCommand {
                                     .into());
                                 }
 
+                                drop(file);
+                                if let Err(e) = fs::rename(&part_path, &final_local_path).await {
+                                    let _ = fs::remove_file(&part_path).await;
+                                    return Err(format!(
+                                        "Cannot write local file '{}': {}",
+                                        final_local_path.display(),
+                                        e
+                                    )
+                                    .into());
+                                }
+
                                 println!("Successfully downloaded {} bytes", bytes_read);
                                 Ok(())
                             }
-                            Err(e) => Err(format!(
-                                "Cannot open remote file '{}': {}",
-                                path.full_path(),
-                                e
-                            )
-                            .into()),
+                            Err(e) => {
+                                drop(file);
+                                let _ = fs::remove_file(&part_path).await;
+                                Err(format!(
+                                    "Cannot open remote file '{}': {}",
+                                    path.full_path(),
+                                    e
+                                )
+                                .into())
+                            }
                         }
                     }
                     Err(e) => Err(format!("Cannot access '{}': {}", path.full_path(), e).into()),
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::part_path;
+    use std::path::Path;
+
+    #[test]
+    fn the_partial_download_is_a_sibling_of_the_destination() {
+        let part = part_path(Path::new("/data/out/file.bin"));
+        assert_eq!(part, Path::new("/data/out/file.bin.curvine-part"));
+        // Same directory, so the publishing rename cannot cross a filesystem.
+        assert_eq!(part.parent(), Some(Path::new("/data/out")));
+        assert_ne!(part, Path::new("/data/out/file.bin"));
     }
 }
