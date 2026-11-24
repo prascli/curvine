@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{JobExecutor, JobFuture, JobPlugin, ResourceClass, TaskContext, TaskOutcome};
+use super::{
+    JobExecutor, JobFuture, JobPlugin, ProgressReporter, ResourceClass, TaskContext, TaskOutcome,
+};
 use crate::common::UfsFactory;
 use crate::worker::task::transfer_task_runner::TransferTaskRunner;
 use curvine_client_core::file::CurvineFileSystem;
 use curvine_error::FsResult;
 use curvine_model::TransferKind;
-use curvine_transfer_client::TransferClient;
 use std::sync::Arc;
 
 /// The compatibility plugin for the existing Load/Export runner.
 pub struct TransferPlugin {
     fs: CurvineFileSystem,
     factory: Arc<UfsFactory>,
-    transfer_client: Option<TransferClient>,
     progress_interval_ms: u64,
     task_timeout_ms: u64,
 }
@@ -34,14 +34,12 @@ impl TransferPlugin {
     pub fn new(
         fs: CurvineFileSystem,
         factory: Arc<UfsFactory>,
-        transfer_client: Option<TransferClient>,
         progress_interval_ms: u64,
         task_timeout_ms: u64,
     ) -> Self {
         Self {
             fs,
             factory,
-            transfer_client,
             progress_interval_ms,
             task_timeout_ms,
         }
@@ -80,13 +78,17 @@ impl JobPlugin for TransferPlugin {
         ResourceClass::Network
     }
 
-    fn create_executor(&self, task: Arc<TaskContext>) -> FsResult<Box<dyn JobExecutor>> {
+    fn create_executor(
+        &self,
+        task: Arc<TaskContext>,
+        reporter: ProgressReporter,
+    ) -> FsResult<Box<dyn JobExecutor>> {
         Ok(Box::new(TransferExecutor {
             runner: Some(TransferTaskRunner::new(
                 task,
                 self.fs.clone(),
                 self.factory.clone(),
-                self.transfer_client.clone(),
+                reporter,
                 self.progress_interval_ms,
                 self.task_timeout_ms,
             )),
